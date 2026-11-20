@@ -22,6 +22,18 @@ Program Arguments
 #. ``python ../nway.py --prior-completeness 1`` ... set expected
    matching completeness (default: 1)
 
+#. ``--local-density`` ... compute association priors using the local
+   source density of each counterpart catalogue at the position of each
+   primary source. Densities are estimated with adaptive spherical
+   kernel density estimation. By default, nway uses one uniform density
+   per catalogue.
+
+#. ``--plot-local-density`` ... save a Mollweide PDF map of the estimated
+   density for each counterpart catalogue. For example, with
+   ``--out=matches.fits`` and a catalogue named ``OPT``, the map is saved
+   as ``matches_OPT.pdf``. This option can be used on its own to generate
+   maps while keeping uniform-density priors.
+
 #. ``python ../nway.py --mag MAGCOLUMN MAGFILE`` ... name of
    <table>:<column> for magnitude biasing, and file name for magnitude
    histogram (use auto for auto-computation within mag-radius). Example:
@@ -40,6 +52,9 @@ Program Arguments
    secondary solutions (``match_flag`` column). If the secondary is
    within this difference (default: 0.005), it is marked as a secondary
    solution.
+
+Both local-density options require at least 11 valid positions in each
+counterpart catalogue.
 
 Input file specifications and units
 -----------------------------------

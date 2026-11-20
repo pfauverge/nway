@@ -13,10 +13,12 @@ import sys
 import astropy.io.fits as pyfits
 import numpy
 import tqdm
+from astropy.coordinates import SkyCoord
 from numpy import exp, log10, pi
 
 import nwaylib.bayesdistance as bayesdist
 import nwaylib.fastskymatch as match
+import nwaylib.localdensity as localdensity
 import nwaylib.logger as logger
 import nwaylib.magnitudeweights as magnitudeweights
 import nwaylib.progress as progress
@@ -125,6 +127,12 @@ parser.add_argument('--mag-exclude-radius', default=None, type=float,
 
 parser.add_argument('--prior-completeness', metavar='COMPLETENESS', default="1", type=str,
 	help='expected matching completeness of sources (prior)')
+
+parser.add_argument('--local-density', action='store_true',
+	help='use local source densities when computing association priors')
+
+parser.add_argument('--plot-local-density', action='store_true',
+	help='save a local source density PDF for each counterpart catalogue')
 
 parser.add_argument('--ignore-unrelated-associations', dest='consider_unrelated_associations', action='store_false',
 	help='Ignore in the calculation source pairings unrelated to the primary source (not recommended)')
@@ -270,6 +278,35 @@ table = match.fits_from_columns(pyfits.ColDefs(columns)).data
 
 assert len(table) > 0, 'No matches.'
 
+if args.local_density or args.plot_local_density:
+	local_density_models = {}
+	for catalogue, name in zip(tables[1:], table_names[1:]):
+		ra = catalogue[match.get_tablekeys(catalogue, 'RA', tablename=name)]
+		dec = catalogue[match.get_tablekeys(catalogue, 'DEC', tablename=name)]
+		valid = numpy.isfinite(ra) & numpy.isfinite(dec) & (ra != -99) & (numpy.abs(dec) <= 90)
+		galactic = SkyCoord(ra[valid], dec[valid], unit='deg', frame='icrs').galactic
+		print('    fitting local density for catalogue "%s" ...' % name)
+		local_density_models[name] = localdensity.fit_local_density_model(galactic.l.deg, galactic.b.deg)
+
+if args.plot_local_density:
+	for filename in localdensity.write_local_density_diagnostic(
+			local_density_models.values(), local_density_models.keys(), outfile):
+		print('    wrote local-density map "%s"' % filename)
+
+if args.local_density:
+	_, primary_rows, primary_inverse = numpy.unique(
+		results[table_names[0]], return_index=True, return_inverse=True)
+	primary_ra = table[match_header['COLS_RA'].split()[0]][primary_rows]
+	primary_dec = table[match_header['COLS_DEC'].split()[0]][primary_rows]
+	primary_galactic = SkyCoord(primary_ra, primary_dec, unit='deg', frame='icrs').galactic
+	local_source_densities_plus = {}
+	for ti, name in enumerate(table_names[1:], start=1):
+		model = local_density_models[name]
+		density = localdensity.estimate_local_density(model, primary_galactic.l.deg, primary_galactic.b.deg)
+		# Keep the (N + 1) / N correction and cap the inverse density at one.
+		correction = source_densities_plus[ti] / source_densities[ti]
+		local_source_densities_plus[ti] = numpy.maximum(density * correction, 1)[primary_inverse]
+
 # first pass: find secure matches and secure non-matches
 print('Computing distance-based probabilities ...')
 
@@ -353,8 +390,14 @@ for case in range(2**(len(table_names)-1)):
 		log_bf[mask] = bayesdist.log_bf_elliptical(
 			separations_selected_ra, separations_selected_dec, errors_selected)
 
-	prior[mask] = source_densities[0] * numpy.prod(prior_completeness[table_mask]) / numpy.prod(source_densities_plus[table_mask])
-	assert numpy.isfinite(prior[mask]).all(), (source_densities, prior_completeness[table_mask], numpy.prod(source_densities_plus[table_mask]))
+	if args.local_density:
+		counterparts = numpy.flatnonzero(table_mask[1:]) + 1
+		density_product = numpy.prod([local_source_densities_plus[ti][mask] for ti in counterparts], axis=0)
+		prior[mask] = numpy.prod(prior_completeness[table_mask]) / density_product
+	else:
+		# original prior
+		prior[mask] = source_densities[0] * numpy.prod(prior_completeness[table_mask]) / numpy.prod(source_densities_plus[table_mask])
+		assert numpy.isfinite(prior[mask]).all(), (source_densities, prior_completeness[table_mask], numpy.prod(source_densities_plus[table_mask]))
 
 assert numpy.isfinite(prior).all(), (prior, log_bf)
 assert numpy.isfinite(log_bf).all(), (prior, log_bf)
@@ -391,7 +434,13 @@ if args.consider_unrelated_associations:
 					# ok, this is helpful.
 					# identify the separations and errors
 					# identify the prior
-					prior_j = source_densities[augmented_cats[0]] / numpy.prod(source_densities_plus[augmented_cats])
+					if args.local_density:
+						# The first catalogue's density cancels except for its N / (N + 1) factor.
+						first = augmented_cats[0]
+						density_product = numpy.prod([local_source_densities_plus[k][j] for k in augmented_cats[1:]])
+						prior_j = (source_densities[first] / source_densities_plus[first]) / density_product
+					else:
+						prior_j = source_densities[augmented_cats[0]] / numpy.prod(source_densities_plus[augmented_cats])
 					# compute a log_bf
 					if simple_errors:
 						errors_selected = [[errors[k][j]] for k in augmented_cats]

@@ -38,6 +38,9 @@ nway is a generic solution to these tasks:
 
 #. Accurate and fast for both small survey areas and all-sky catalogues
 
+#. Optional local source densities for cross-matching catalogues with
+   non-uniform source distributions.
+
 
 Contributors
 ------------
